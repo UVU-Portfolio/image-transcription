@@ -7,43 +7,51 @@ WORKDIR /app
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     python3-pip \
+    python3-dev \
+    build-essential \
     tesseract-ocr \
     poppler-utils \
     git \
     libgl1-mesa-glx \
     && rm -rf /var/lib/apt/lists/*
 
-# Clone pix2tex from GitHub
-RUN git clone --depth 1 https://github.com/lukas-blecher/LaTeX-OCR.git pix2tex
+# Clone pix2tex from GitHub at the specific commit
+RUN git clone https://github.com/lukas-blecher/LaTeX-OCR.git pix2tex && \
+    cd pix2tex && \
+    git checkout 3bd6f9a
 
 WORKDIR /app/pix2tex
 
-# Install pix2tex dependencies
-RUN pip install --no-cache-dir \
-    numpy \
-    pillow \
-    opencv-python \
-    tqdm \
-    transformers==4.11.3 \
-    timm==0.4.12 \
-    torch \
-    torchvision \
-    python-docx==0.8.11 \
-    watchdog \
-    albumentations \
-    editdistance \
-    rapidfuzz \
-    pyspellchecker \
-    pix2tex
+# Copy application files
+COPY requirements.txt monitor_and_transcribe.py /app/
 
-# Copy your Python script into the container
-COPY monitor_and_transcribe.py /app/
+# Upgrade pip and install dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir typing_extensions>=4.0.0 && \
+    pip install --no-cache-dir -r /app/requirements.txt && \
+    pip install -e .
 
 # Create necessary directories
-RUN mkdir -p /mnt/d/OCR-stuff/midterm-prep /mnt/d/OCR-stuff/midterm-prep-output
+RUN mkdir -p /app/input /app/output
 
-# Download the pix2tex model
-RUN python3 -c "from pix2tex.cli import LatexOCR; LatexOCR()"
+# Set the model download script
+COPY download_model.py /app/
+RUN python3 /app/download_model.py
 
-# Set up the entrypoint to run your monitoring script
-CMD ["python3", "/app/monitor_and_transcribe.py"]
+# Create a non-root user
+RUN useradd -m -u 1000 appuser && \
+    chown -R appuser:appuser /app
+
+# Switch to non-root user
+USER appuser
+
+# Set up healthcheck
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD python3 -c "import os; exit(0 if os.path.exists('/app/pix2tex/run.py') else 1)"
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV CUDA_VISIBLE_DEVICES=0
+
+# Set up the entrypoint
+ENTRYPOINT ["python3", "/app/monitor_and_transcribe.py"]
